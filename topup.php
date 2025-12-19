@@ -1,3 +1,4 @@
+
 <?php
 // topup.php - Top Up MINEM Tokens with OxaPay
 session_start();
@@ -547,36 +548,50 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === 'true' && isset($_GET['order']
             font-weight: 600;
         }
 
-        .preset-amounts {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-            gap: 10px;
-            margin-top: 15px;
-        }
-
-        .preset-btn {
-            padding: 12px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+        .minem-preview {
+            margin-top: 10px;
+            padding: 12px 16px;
+            background: rgba(6, 182, 212, 0.1);
+            border: 1px solid rgba(6, 182, 212, 0.2);
             border-radius: 10px;
-            color: var(--text-secondary);
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-align: center;
+            display: none;
+            animation: fadeIn 0.3s ease;
         }
 
-        .preset-btn:hover {
-            background: rgba(250, 204, 21, 0.1);
-            border-color: rgba(250, 204, 21, 0.3);
-            color: var(--gold);
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
 
-        .preset-btn.active {
-            background: rgba(250, 204, 21, 0.2);
-            border-color: var(--gold);
-            color: var(--gold);
+        .minem-preview.active {
+            display: block;
+        }
+
+        .minem-preview-label {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .minem-preview-value {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+
+        .validation-message {
+            margin-top: 8px;
+            font-size: 12px;
+            min-height: 16px;
+        }
+
+        .validation-error {
+            color: #FCA5A5;
+        }
+
+        .validation-success {
+            color: #6EE7B7;
         }
 
         .crypto-info {
@@ -813,10 +828,6 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === 'true' && isset($_GET['order']
                 gap: 20px;
                 text-align: center;
             }
-            
-            .preset-amounts {
-                grid-template-columns: repeat(2, 1fr);
-            }
         }
     </style>
 </head>
@@ -899,6 +910,7 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === 'true' && isset($_GET['order']
                         <div class="form-input-group">
                             <input type="number" 
                                    name="usd_amount" 
+                                   id="usd_amount"
                                    class="form-input" 
                                    min="<?php echo MIN_DEPOSIT_AMOUNT; ?>" 
                                    max="<?php echo MAX_DEPOSIT_AMOUNT; ?>" 
@@ -909,16 +921,14 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === 'true' && isset($_GET['order']
                             <span class="currency-label">USD</span>
                         </div>
                         
-                        <div class="preset-amounts">
-                            <button type="button" class="preset-btn" data-amount="0.50">$0.50</button>
-                            <button type="button" class="preset-btn" data-amount="1">$1</button>
-                            <button type="button" class="preset-btn" data-amount="5">$5</button>
-                            <button type="button" class="preset-btn" data-amount="10">$10</button>
-                            <button type="button" class="preset-btn" data-amount="25">$25</button>
-                            <button type="button" class="preset-btn" data-amount="50">$50</button>
-                            <button type="button" class="preset-btn" data-amount="100">$100</button>
-                            <button type="button" class="preset-btn" data-amount="500">$500</button>
+                        <!-- Real-time MINEM preview -->
+                        <div class="minem-preview" id="minemPreview">
+                            <div class="minem-preview-label">You will receive:</div>
+                            <div class="minem-preview-value" id="minemAmount">0 MINEM</div>
                         </div>
+                        
+                        <!-- Validation message -->
+                        <div class="validation-message" id="validationMessage"></div>
                     </div>
 
                     <div class="crypto-info">
@@ -938,7 +948,8 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === 'true' && isset($_GET['order']
                             <span class="coin-badge">SOL</span>
                             <span class="coin-badge">XRP</span>
                             <span class="coin-badge">DOGE</span>
-                            <span class="coin-badge">+50 more</span>
+                            <span class="coin-badge">
+                              more</span>
                         </div>
                     </div>
 
@@ -1012,46 +1023,119 @@ if (isset($_GET['cancel']) && $_GET['cancel'] === 'true' && isset($_GET['order']
     </div>
 
     <script>
-        // Preset amount buttons
-        document.querySelectorAll('.preset-btn').forEach(button => {
-            button.addEventListener('click', function() {
-                const amount = this.getAttribute('data-amount');
-                document.querySelector('input[name="usd_amount"]').value = amount;
+        // Constants from PHP
+        const MINEM_PER_DOLLAR = <?php echo MINEM_PER_DOLLAR; ?>;
+        const MIN_DEPOSIT_AMOUNT = <?php echo MIN_DEPOSIT_AMOUNT; ?>;
+        const MAX_DEPOSIT_AMOUNT = <?php echo MAX_DEPOSIT_AMOUNT; ?>;
+
+        // DOM elements
+        const usdInput = document.getElementById('usd_amount');
+        const minemPreview = document.getElementById('minemPreview');
+        const minemAmount = document.getElementById('minemAmount');
+        const validationMessage = document.getElementById('validationMessage');
+
+        // Function to format number with commas
+        function formatNumber(number) {
+            return number.toLocaleString('en-US', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            });
+        }
+
+        // Function to calculate and display MINEM amount
+        function updateMinemPreview() {
+            const usdValue = parseFloat(usdInput.value) || 0;
+            
+            // Hide/show preview based on input
+            if (usdValue > 0) {
+                minemPreview.classList.add('active');
                 
-                // Update active state
-                document.querySelectorAll('.preset-btn').forEach(btn => {
-                    btn.classList.remove('active');
-                });
-                this.classList.add('active');
+                // Calculate MINEM amount
+                const calculatedMinem = usdValue * MINEM_PER_DOLLAR;
+                minemAmount.textContent = formatNumber(calculatedMinem) + ' MINEM';
                 
-                // Submit form to show preview
-                this.closest('form').submit();
+                // Validate input
+                validateAmount(usdValue);
+            } else {
+                minemPreview.classList.remove('active');
+                validationMessage.textContent = '';
+                validationMessage.className = 'validation-message';
+            }
+        }
+
+        // Function to validate amount
+        function validateAmount(amount) {
+            if (amount < MIN_DEPOSIT_AMOUNT) {
+                validationMessage.textContent = `Minimum deposit is $${MIN_DEPOSIT_AMOUNT}`;
+                validationMessage.className = 'validation-message validation-error';
+                return false;
+            } else if (amount > MAX_DEPOSIT_AMOUNT) {
+                validationMessage.textContent = `Maximum deposit is $${MAX_DEPOSIT_AMOUNT}`;
+                validationMessage.className = 'validation-message validation-error';
+                return false;
+            } else {
+                validationMessage.textContent = `Valid amount. You'll receive ${formatNumber(amount * MINEM_PER_DOLLAR)} MINEM`;
+                validationMessage.className = 'validation-message validation-success';
+                return true;
+            }
+        }
+
+        // Event listeners for real-time updates
+        usdInput.addEventListener('input', updateMinemPreview);
+        usdInput.addEventListener('change', updateMinemPreview);
+        
+        // Initialize preview if there's already a value
+        document.addEventListener('DOMContentLoaded', function() {
+            if (usdInput.value) {
+                updateMinemPreview();
+            }
+            
+            // Prevent form submission if amount is invalid
+            document.querySelector('form').addEventListener('submit', function(e) {
+                const usdValue = parseFloat(usdInput.value) || 0;
+                if (!validateAmount(usdValue)) {
+                    e.preventDefault();
+                    usdInput.focus();
+                }
             });
         });
 
-        // Auto-submit form when amount changes (for preview)
-        document.querySelector('input[name="usd_amount"]').addEventListener('change', function() {
-            if (this.value >= <?php echo MIN_DEPOSIT_AMOUNT; ?> && this.value <= <?php echo MAX_DEPOSIT_AMOUNT; ?>) {
-                this.closest('form').submit();
+        // Auto-format input on blur
+        usdInput.addEventListener('blur', function() {
+            if (this.value) {
+                this.value = parseFloat(this.value).toFixed(2);
+                updateMinemPreview();
             }
         });
 
-        // Format currency input
-        document.querySelector('input[name="usd_amount"]').addEventListener('input', function(e) {
-            let value = e.target.value;
+        // Prevent invalid characters
+        usdInput.addEventListener('keypress', function(e) {
+            const charCode = e.which ? e.which : e.keyCode;
+            const value = this.value + String.fromCharCode(charCode);
             
-            // Remove existing active class from preset buttons
-            document.querySelectorAll('.preset-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
+            // Allow only numbers and one decimal point
+            if (charCode !== 46 && charCode > 31 && (charCode < 48 || charCode > 57)) {
+                e.preventDefault();
+                return;
+            }
             
-            // Add active class to matching preset button
-            if (value) {
-                document.querySelectorAll('.preset-btn').forEach(btn => {
-                    if (btn.getAttribute('data-amount') === value) {
-                        btn.classList.add('active');
-                    }
-                });
+            // Allow only one decimal point
+            if (charCode === 46 && this.value.includes('.')) {
+                e.preventDefault();
+                return;
+            }
+            
+            // Limit to 2 decimal places
+            if (this.value.includes('.') && this.value.split('.')[1].length >= 2) {
+                e.preventDefault();
+                return;
+            }
+            
+            // Check if total value would exceed max
+            if (parseFloat(value) > MAX_DEPOSIT_AMOUNT) {
+                e.preventDefault();
+                this.value = MAX_DEPOSIT_AMOUNT;
+                updateMinemPreview();
             }
         });
     </script>
